@@ -1,35 +1,33 @@
-D-Scheduler (D-スケジューラー)
-Copyright (c) 2025 D-Scheduler Project
+D-Scheduler License
+-------------------
 
-本ソフトウェアは MIT ライセンスの下で公開されています。
+本ソフトウェア「D-Scheduler」はフリーソフトとして提供されます。
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+■ 利用・改変・再配布について
+- 個人・商用を問わず、自由に利用・改変・再配布することができます。
+- 改変や再配布を行う場合は、元の著作権表示および本ライセンス文を必ず添付してください。
 
-上記の著作権表示および本許諾表示は、本ソフトウェアのすべての複製物または
-重要な部分に記載するものとします。
+■ 免責事項
+- 本ソフトウェアの利用により発生したいかなる損害についても、
+  開発者は一切の責任を負いません。
+- 利用者の責任においてご使用ください。
 
-本ソフトウェアは「現状のまま」で提供され、明示黙示を問わず、商品性、
-特定目的への適合性、権利非侵害についての保証を含め、いかなる保証も
-なされません。著作者または著作権者は、契約、不法行為、またはそれ以外により
-ソフトウェアまたはその使用その他の取引に起因または関連して生じるいかなる
-請求、損害その他の責任についても、一切責任を負いません。
+■ 著作権表示
+© 2025 D-Scheduler Project
 
----
 
-## 依存ライブラリのライセンス
+Third-Party Licenses
+--------------------
+
+本ソフトウェアは以下の外部ライブラリに依存しています。  
+各ライブラリはそれぞれのライセンス条項に従って利用されています。
 
 ### PyQt6
-Copyright (c) Riverbank Computing Limited
-
-PyQt は GNU GPL v3 または Riverbank Commercial License の下で配布されています。
-詳細は https://www.riverbankcomputing.com/commercial/license/ を参照してください。
+- Copyright (C) Riverbank Computing Limited
+- ライセンス: GPL v3 または 商用ライセンス (利用条件に従う必要があります)
+- https://www.riverbankcomputing.com/software/pyqt/
 
 ### jpholiday
-Copyright (c) 2014-2025
-jpholiday は MIT License の下で公開されています。
-https://github.com/LalitV/jpholiday
+- Copyright (c) 2018-2025 sacloud
+- ライセンス: MIT License
+- https://github.com/holiday-jp/holiday_jp-python
