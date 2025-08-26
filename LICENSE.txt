@@ -1,0 +1,35 @@
+D-Scheduler (D-スケジューラー)
+Copyright (c) 2025 D-Scheduler Project
+
+本ソフトウェアは MIT ライセンスの下で公開されています。
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+上記の著作権表示および本許諾表示は、本ソフトウェアのすべての複製物または
+重要な部分に記載するものとします。
+
+本ソフトウェアは「現状のまま」で提供され、明示黙示を問わず、商品性、
+特定目的への適合性、権利非侵害についての保証を含め、いかなる保証も
+なされません。著作者または著作権者は、契約、不法行為、またはそれ以外により
+ソフトウェアまたはその使用その他の取引に起因または関連して生じるいかなる
+請求、損害その他の責任についても、一切責任を負いません。
+
+---
+
+## 依存ライブラリのライセンス
+
+### PyQt6
+Copyright (c) Riverbank Computing Limited
+
+PyQt は GNU GPL v3 または Riverbank Commercial License の下で配布されています。
+詳細は https://www.riverbankcomputing.com/commercial/license/ を参照してください。
+
+### jpholiday
+Copyright (c) 2014-2025
+jpholiday は MIT License の下で公開されています。
+https://github.com/LalitV/jpholiday
