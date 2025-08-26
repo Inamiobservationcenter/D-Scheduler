@@ -1,16 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-カレンダー型メモ帳（連続日付ビュー・無限スクロール版）
-
-主な変更点
-- 月区切りなしの連続表示を、スクロール端で「前後に日付を動的生成」して擬似的に無限化
-- 初期表示は約2ヶ月（62日）。上下端に近づくと自動で±60日ずつ拡張
-- 既存機能は維持（設定の永続化/ダークテーマ/列管理/自動保存/URL強調＆ダブルクリック/祝日・週末配色/検索）
-- 検索の「表示範囲」は現在テーブルに展開済みの範囲を指します。「すべて」は保存済み全日付
-
-注: QTableWidget は真の“無限”は持てないため、必要に応じて前後へ行を追加して実質的に無限にスクロールできるようにしています。
-"""
-
 import json
 import re
 import sys
@@ -34,8 +21,14 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QRadioButton, QCheckBox
 )
 
+try:
+    import jpholiday  # pip install jpholiday
+    HAS_JPHOLIDAY = True
+except Exception:
+    HAS_JPHOLIDAY = False
+
 # --------- 定数/ユーティリティ ----------
-JP_WEEK = ["日", "月", "火", "水", "木", "金", "土"]
+JP_WEEK = ["月", "火", "水", "木", "金", "土", "日"]
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 SETTINGS_PATH = Path.home() / ".calendar_notes_settings.json"
 DEFAULT_AUTOSAVE = Path.home() / "calendar-notes_autosave.json"
@@ -460,42 +453,56 @@ class SearchDialog(QDialog):
             return
         y, m, d = meta
         target = date(y, m, d)
-        # 表示範囲外なら、その日を含むよう前後に展開してからスクロール
-        self.app.ensure_date_visible(target)
-        self.app.scroll_to_date(target)
+        # 選んだ日をアンカーに（＝最上行）
+        self.app.set_view_anchor(target)
         self.accept()
 
 
 # ---------- 月選択ダイアログ ----------
 class MonthPickerDialog(QDialog):
-    """QCalendarWidgetで日付選択 → 選択月の月初へ表示をジャンプ/展開"""
+    """QCalendarWidgetで日付選択 → 選んだ日 or 今日 を基準（最上行）にして表示"""
     def __init__(self, app: "CalendarApp"):
         super().__init__(app)
         self.app = app
         self.setWindowTitle("月選択")
-        self.setMinimumSize(420, 340)
+        self.setMinimumSize(420, 360)
 
         v = QVBoxLayout(self)
         self.cal = QCalendarWidget()
-        # 現在の表示開始月を基準に
-        rs = self.app.range_start
-        self.cal.setSelectedDate(QDate(rs.year, rs.month, 1))
+
+        # 直近のアンカー日を初期選択（前回選んだ日を再表示）
+        anchor = getattr(self.app, "current_anchor_date", None) or self.app.range_start
+        self.cal.setSelectedDate(QDate(anchor.year, anchor.month, anchor.day))
         v.addWidget(self.cal)
 
+        # ボタン群：今日へ / この日に合わせる（最上行） / 閉じる
         h = QHBoxLayout()
-        btn_ok = QPushButton("この月へ移動")
+        btn_today = QPushButton("今日へ")
+        btn_ok = QPushButton("この日に合わせる（最上行）")
         btn_close = QPushButton("閉じる")
-        h.addWidget(btn_ok); h.addWidget(btn_close)
+        h.addWidget(btn_today)
+        h.addWidget(btn_ok)
+        h.addWidget(btn_close)
         v.addLayout(h)
 
+        btn_today.clicked.connect(self._jump_today)
         btn_ok.clicked.connect(self._apply_and_close)
         btn_close.clicked.connect(self.reject)
 
+    def _jump_today(self):
+        """今日を基準にして、今日が最上行に来るよう表示を切り替える"""
+        t = date.today()
+        # カレンダー選択も今日に更新（次回開いたときの見た目にも自然）
+        self.cal.setSelectedDate(QDate(t.year, t.month, t.day))
+        # 表示は今日をアンカー（＝最上段）
+        self.app.set_view_anchor(t)
+        self.accept()
+
     def _apply_and_close(self):
+        """カレンダーで選択した日を基準（最上行）にして表示"""
         qd = self.cal.selectedDate()
-        month_start = date(qd.year(), qd.month(), 1)
-        # 月初から約2ヶ月分へ置き換え（従来と同規模）
-        self.app.rebuild_range(month_start, month_start + timedelta(days=61), keep_scroll=False)
+        chosen = date(qd.year(), qd.month(), qd.day())
+        self.app.set_view_anchor(chosen)
         self.accept()
 
 
@@ -503,13 +510,16 @@ class MonthPickerDialog(QDialog):
 class CalendarApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("カレンダー型メモ帳")
+        self.setWindowTitle("D-Scheduler")
 
         today = date.today()
         # 初期表示：今月1日から約2ヶ月分（62日）
         month_start = date(today.year, today.month, 1)
         self.range_start: date = month_start
         self.range_end: date = month_start + timedelta(days=61)
+
+        # 起動時アンカーを月初に明示
+        self.current_anchor_date: date = month_start
 
         # 既定（設定で上書き）
         self.columns = [
@@ -572,6 +582,17 @@ class CalendarApp(QMainWindow):
         self._autosave_timer = QTimer(self)
         self._autosave_timer.timeout.connect(self._autosave_tick)
         self._apply_autosave_settings()
+
+    def set_view_anchor(self, anchor: date):
+        """
+        アンカー（基準日）を指定し、その日が「一番上」に来るように
+        表示範囲を『anchor ～ anchor+61日』で再構築する。
+        """
+        self.current_anchor_date = anchor
+        start = anchor
+        end = anchor + timedelta(days=61)  # 約2ヶ月分
+        # keep_scroll=False で先頭から描画＝アンカーが上端に来る
+        self.rebuild_range(start, end, keep_scroll=False)
 
     # ---------- 設定 I/O ----------
     def _load_settings(self) -> dict:
@@ -670,6 +691,20 @@ class CalendarApp(QMainWindow):
                     break
 
     # ---------- テーブル構築（範囲全面再構築） ----------
+    def _is_holiday_jp(self, dt: date) -> bool:
+        """
+        日本の祝日を判定。jpholiday があればそちらを優先し、無い場合は
+        設定で入力された self.holidays（"YYYY-MM-DD" の集合）を見る。
+        """
+        try:
+            if HAS_JPHOLIDAY and jpholiday.is_holiday(dt):
+                return True
+        except Exception:
+            pass
+        # フォールバック（手入力祝日）
+        return dt.strftime("%Y-%m-%d") in self.holidays
+
+    
     def rebuild_range(self, start: date, end: date, keep_scroll: bool):
         """start..end を全面再構築。keep_scroll=True なら元の先頭行を維持"""
         # アンカー（トップの可視行）を記憶
@@ -704,24 +739,32 @@ class CalendarApp(QMainWindow):
         self.rebuild_range(self.range_start, self.range_end, keep_scroll=True)
 
     def _build_row(self, row: int, dt: date):
-        key = date_key(dt)
-        label = f"{dt.month}月{pad2(dt.day)}日({JP_WEEK[dt.weekday()]})"
+        key = dt.strftime("%Y-%m-%d")
+        w = dt.weekday()  # 月=0..日=6
+        label = f"{dt.month}月{str(dt.day).zfill(2)}日({JP_WEEK[w]})"
 
         # --- 日付セル（左端のみ色付け） ---
         it = QTableWidgetItem(label)
         it.setFlags(Qt.ItemFlag.ItemIsEnabled)
 
-        # 曜日・祝日の色分け
-        is_holiday = key in self.holidays
-        is_sun = (dt.weekday() == 6)
-        is_sat = (dt.weekday() == 5)
+        # 日本の祝日判定（jpholiday優先, フォールバックに手入力self.holidays）
+        is_holiday = self._is_holiday_jp(dt)
+        is_sun = (w == 6)
+        is_sat = (w == 5)
 
+        # カラー（見やすい淡色系）
+        PINK_BG  = QColor("#FCE4EC")  # 淡いピンク（Material Pink 50）
+        PINK_FG  = QColor("#AD1457")  # 濃いピンク系文字（見やすさ重視）
+        BLUE_BG  = QColor("#E3F2FD")  # 淡い水色（既存）
+        BLUE_FG  = QColor("#0D47A1")  # 濃い青系文字（見やすさ重視）
+
+        # 祝日優先 → 日曜と同じピンク系
         if is_holiday or is_sun:
-            it.setBackground(QColor("#E53935"))   # 赤
-            it.setForeground(QColor("#FFFFFF"))   # 白文字
+            it.setBackground(PINK_BG)
+            it.setForeground(PINK_FG)
         elif is_sat:
-            it.setBackground(QColor("#E3F2FD"))   # 水色
-            it.setForeground(QColor("#0D47A1"))   # 青文字
+            it.setBackground(BLUE_BG)
+            it.setForeground(BLUE_FG)
         # 平日は色なし
 
         self.table.setItem(row, 0, it)
@@ -741,13 +784,13 @@ class CalendarApp(QMainWindow):
                 return _slot
             editor.textChanged.connect(make_slot())
 
-            # 行高調整
+            # 行高は行内最大に
             def adjust_row_height(r=row):
                 max_h = 36
                 for cc in range(1, self.table.columnCount()):
-                    w = self.table.cellWidget(r, cc)
-                    if isinstance(w, AutoResizeTextEdit):
-                        max_h = max(max_h, w.height())
+                    wgt = self.table.cellWidget(r, cc)
+                    if isinstance(wgt, AutoResizeTextEdit):
+                        max_h = max(max_h, wgt.height())
                 if self.table.rowHeight(r) != max_h:
                     self.table.setRowHeight(r, max_h)
 
@@ -756,48 +799,7 @@ class CalendarApp(QMainWindow):
 
             self.table.setCellWidget(row, ci, editor)
 
-            key = date_key(dt)
-            label = f"{dt.month}月{pad2(dt.day)}日({JP_WEEK[dt.weekday()]})"
-            it = QTableWidgetItem(label)
-            it.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            # 週末/祝日
-            if dt.weekday() == 5:  # 土
-                it.setBackground(QColor("#E8F4FF"))
-            elif dt.weekday() == 6:  # 日
-                it.setBackground(QColor("#FFE8EE"))
-            if key in self.holidays:
-                it.setBackground(QColor("#FFF6C2"))
-            self.table.setItem(row, 0, it)
-
-            for ci, col in enumerate(self.columns, start=1):
-                editor = AutoResizeTextEdit(base_font_pt=self.font_pt)
-                if key in self.cells and col["id"] in self.cells[key]:
-                    editor.setPlainText(self.cells[key][col["id"]])
-
-                editor.requestUrlList.connect(self._show_url_list_dialog)
-
-            def make_slot(k=key, col_id=col["id"], ed=editor):
-                def _slot():
-                    self.cells.setdefault(k, {})[col_id] = ed.toPlainText()
-                    self._mark_dirty()
-                return _slot
-            editor.textChanged.connect(make_slot())
-
-            # 行の高さ … 行内最大に
-            def adjust_row_height(row=row):
-                max_h = 36
-                for cc in range(1, self.table.columnCount()):
-                    w = self.table.cellWidget(row, cc)
-                    if isinstance(w, AutoResizeTextEdit):
-                        max_h = max(max_h, w.height())
-                if self.table.rowHeight(row) != max_h:
-                    self.table.setRowHeight(row, max_h)
-
-            editor.heightChanged.connect(lambda _h, r=row: adjust_row_height(r))
-            QTimer.singleShot(0, lambda r=row: adjust_row_height(r))
-
-            self.table.setCellWidget(row, ci, editor)
-
+    
     def _apply_font_all(self, pt: int):
         self.font_pt = int(pt)
         for r in range(self.table.rowCount()):
@@ -910,6 +912,7 @@ class CalendarApp(QMainWindow):
             self.settings["autosave_path"] = str(self.autosave_path)
             self._save_settings()
             self._dirty = False
+            self.current_anchor_date = self.range_start
 
     def open_settings(self):
         SettingsDialog(self).exec()
