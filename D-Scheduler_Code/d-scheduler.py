@@ -1294,7 +1294,7 @@ class CalendarApp(QMainWindow):
 
         dlg.applied.connect(on_applied)
         dlg.exec()
-D
+
     # ---------- 自動保存 ----------
     def _apply_autosave_settings(self):
         enabled = bool(self.settings.get("autosave_enabled", True))
