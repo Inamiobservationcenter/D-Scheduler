@@ -5,8 +5,8 @@ from typing import Dict, List, Set
 
 from PyQt6.QtCore import Qt, QDate, QDateTime, pyqtSignal, QTimer
 from PyQt6.QtGui import (
-    QAction, QFont, QSyntaxHighlighter,
-    QTextCharFormat, QColor, QTextCursor, QCloseEvent, QGuiApplication
+    QAction, QFont, QSyntaxHighlighter,QGuiApplication, QCursor,
+    QTextCharFormat, QColor, QTextCursor, QCloseEvent
 )
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QLineEdit, QFileDialog, QListWidget, QListWidgetItem,
     QMessageBox, QAbstractItemView, QTextBrowser, QDialog, QFormLayout,
     QGroupBox, QTreeWidget, QTreeWidgetItem, QCalendarWidget,
-    QHBoxLayout, QRadioButton, QCheckBox
+    QHBoxLayout, QRadioButton, QCheckBox,QTabWidget
 )
 
 try:
@@ -26,9 +26,12 @@ except Exception:
 # --------- 定数/ユーティリティ ----------
 JP_WEEK = ["月", "火", "水", "木", "金", "土", "日"]
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+COLUMN_WIDTH_MIN = 30
+COLUMN_WIDTH_MAX = 1200
 SETTINGS_PATH = Path.home() / ".calendar_notes_settings.json"
 DEFAULT_AUTOSAVE_DIR = Path.home() / "D-Schedule"
 DEFAULT_AUTOSAVE = DEFAULT_AUTOSAVE_DIR / "calendar-notes_autosave.json"
+
 
 def _strip_url_trailing_punct(u: str) -> str:
     """
@@ -213,7 +216,11 @@ class UrlListDialog(QDialog):
 # ---------- 設定ダイアログ（即時反映＋永続化） ----------
 class SettingsDialog(QDialog):
     """
-    縦列（カラム）の追加/削除・幅変更、テーマ切替、手動祝日の編集に対応した設定ダイアログ
+    設定ダイアログをタブ化:
+      - 列(カラム): 列のタイトル/幅/並び替え(↑↓⤒⤓)/削除、列の追加
+      - 表示・テーマ: フォント、ダークモード、常に今日を最上段
+      - その他: 自動保存秒数、自動拡張日数、手動祝日
+    [適用] 押下で現在の内容を settings 辞書に反映して applied を発火
     """
     applied = pyqtSignal(dict)
 
@@ -223,37 +230,45 @@ class SettingsDialog(QDialog):
         self.setModal(True)
         self.settings = dict(settings)
 
-        v = QVBoxLayout(self)
+        self._col_rows: List[dict] = []
 
-        # 列（カラム）設定
-        box_cols = QGroupBox("列（カラム）設定")
-        v_cols = QVBoxLayout(box_cols)
+        root = QVBoxLayout(self)
 
-        # 列行を入れる専用コンテナ（この中に行を足す）
-        self._col_rows = []  # (id, le_title, sp_width, row_layout)
-        self._cols_container = QWidget()
-        self._cols_v = QVBoxLayout(self._cols_container)
+        self.tabs = QTabWidget(self)
+        root.addWidget(self.tabs)
+
+        # --- タブ1: 列(カラム) ---
+        self._tab_cols = QWidget(self)
+        self.tabs.addTab(self._tab_cols, "列(カラム)")
+        v_cols = QVBoxLayout(self._tab_cols)
+
+        self._cols_v = QVBoxLayout()
         self._cols_v.setContentsMargins(0, 0, 0, 0)
         self._cols_v.setSpacing(6)
-        v_cols.addWidget(self._cols_container)
+        v_cols.addLayout(self._cols_v)
 
-        # 既存列を追加（ボタンより上＝コンテナへ）
         for c in self.settings.get("columns", []):
-            self._append_column_row(c.get("id", ""), c.get("title", ""), c.get("width", 240))
+            self._append_column_row(
+                col_id=c.get("id", ""),
+                title=c.get("title", c.get("id", "")),
+                width=int(c.get("width", 240))
+            )
 
-        # 「列を追加」ボタンはコンテナの“下”に置く
+        help_lbl = QLabel("並び替え：▲ 上へ / ▼ 下へ / ⤒ 先頭へ / ⤓ 末尾へ")
+        help_lbl.setStyleSheet("color:#888; padding:4px 2px;")
+        v_cols.addWidget(help_lbl)
+
         hb_add = QHBoxLayout()
-        btn_add = QPushButton("列を追加")
-        btn_add.clicked.connect(lambda: self._append_column_row("", "", 240))
         hb_add.addStretch(1)
-        hb_add.addWidget(btn_add)
+        btn_add_col = QPushButton("列を追加")
+        btn_add_col.clicked.connect(self._on_add_column)
+        hb_add.addWidget(btn_add_col)
         v_cols.addLayout(hb_add)
 
-        v.addWidget(box_cols)
-
-        # 表示 / テーマ
-        box_view = QGroupBox("表示 / テーマ")
-        v_view = QVBoxLayout(box_view)
+        # --- タブ2: 表示・テーマ ---
+        self._tab_view = QWidget(self)
+        self.tabs.addTab(self._tab_view, "表示・テーマ")
+        v_view = QVBoxLayout(self._tab_view)
 
         row_f = QHBoxLayout()
         row_f.addWidget(QLabel("本文フォント(pt):"))
@@ -261,144 +276,303 @@ class SettingsDialog(QDialog):
         self.sp_font.setRange(8, 32)
         self.sp_font.setValue(int(self.settings.get("font_pt", 11)))
         row_f.addWidget(self.sp_font)
+        row_f.addStretch(1)
         v_view.addLayout(row_f)
 
         row_t = QHBoxLayout()
-        row_t.addWidget(QLabel("テーマ:"))
         self.cb_theme_dark = QCheckBox("ダークモード")
         self.cb_theme_dark.setChecked(self.settings.get("theme", "light") == "dark")
         row_t.addWidget(self.cb_theme_dark)
+        row_t.addStretch(1)
         v_view.addLayout(row_t)
 
         row_a = QHBoxLayout()
         self.cb_today_top = QCheckBox("常に「今日」を最上段にする")
         self.cb_today_top.setChecked(bool(self.settings.get("always_today_top", True)))
         row_a.addWidget(self.cb_today_top)
+        row_a.addStretch(1)
         v_view.addLayout(row_a)
 
-        v.addWidget(box_view)
+        v_view.addStretch(1)
 
-        # その他
-        box_misc = QGroupBox("その他")
-        v_misc = QVBoxLayout(box_misc)
+        # --- タブ3: その他 ---
+        self._tab_misc = QWidget(self)
+        self.tabs.addTab(self._tab_misc, "その他")
+        v_misc = QVBoxLayout(self._tab_misc)
 
         row_s = QHBoxLayout()
         row_s.addWidget(QLabel("自動保存(秒):"))
         self.sp_autosave = QSpinBox()
         self.sp_autosave.setRange(5, 600)
-        self.sp_autosave.setValue(int(self.settings.get("autosave_interval_sec", 10)))
+        self.sp_autosave.setValue(int(self.settings.get("auto_save_seconds", self.settings.get("autosave_interval_sec", 30))))
         row_s.addWidget(self.sp_autosave)
-        v_misc.addLayout(row_s)
 
-        row_e = QHBoxLayout()
-        row_e.addWidget(QLabel("自動拡張日数（片側）:"))
+        row_s.addSpacing(24)
+        row_s.addWidget(QLabel("自動拡張日数（片側）:"))
         self.sp_expand = QSpinBox()
         self.sp_expand.setRange(7, 120)
         self.sp_expand.setValue(int(self.settings.get("expand_days_each", 30)))
-        row_e.addWidget(self.sp_expand)
-        v_misc.addLayout(row_e)
-
-        v.addWidget(box_misc)
+        row_s.addWidget(self.sp_expand)
+        row_s.addStretch(1)
+        v_misc.addLayout(row_s)
 
         # 手動祝日
         box_h = QGroupBox("手動祝日（1行1日で YYYY-MM-DD を入力）")
         v_h = QVBoxLayout(box_h)
         self.ed_holidays = QTextEdit()
-        self.ed_holidays.setPlaceholderText("例:\n2025-01-01\n2025-02-11\n…")
+        self.ed_holidays.setPlaceholderText("例:\n2025-01-01\n2025-02-11")
         self.ed_holidays.setFixedHeight(120)
 
-        mh_list = self.settings.get("manual_holidays", []) or []
+        # 既存設定から初期化（holidays: 改行区切り文字列 or manual_holidays: リスト）
         hol_str = self.settings.get("holidays", "")
-        if isinstance(mh_list, list) and mh_list:
+        mh_list = self.settings.get("manual_holidays", [])
+        if isinstance(hol_str, str) and hol_str.strip():
+            self.ed_holidays.setPlainText(hol_str.strip())
+        elif isinstance(mh_list, list) and mh_list:
             self.ed_holidays.setPlainText("\n".join(mh_list))
-        elif isinstance(hol_str, str) and hol_str.strip():
-            self.ed_holidays.setPlainText(hol_str)
-        else:
-            self.ed_holidays.setPlainText("")
 
         v_h.addWidget(self.ed_holidays)
-        v.addWidget(box_h)
+        v_misc.addWidget(box_h)
 
-        # ボタン
+        v_misc.addStretch(1)
+
         hb = QHBoxLayout()
+        hb.addStretch(1)
         btn_apply = QPushButton("適用")
         btn_close = QPushButton("閉じる")
         btn_apply.clicked.connect(self._on_apply)
         btn_close.clicked.connect(self.reject)
-        hb.addStretch(1)
         hb.addWidget(btn_apply)
         hb.addWidget(btn_close)
-        v.addLayout(hb)
+        root.addLayout(hb)
 
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(600)
 
-    def _append_column_row(self, cid: str, title: str, width: int):
+    
+    # ===== 列1行の生成（#／タイトル／幅／[↑↓⤒⤓]／[削除]） =====
+    def _append_column_row(self, col_id: str, title: str, width: int):
+        """
+        列1行分のUIを生成して _col_rows に登録し、レイアウト末尾へ追加する。
+        配置: 左から「# / タイトル / 幅 / 並び替え(▲▼⤒⤓) / 削除」
+        """
         row = QHBoxLayout()
-        le = QLineEdit(title or "")
-        sp = QSpinBox()
-        sp.setRange(80, 1200)
-        sp.setValue(max(80, min(int(width or 240), 1200)))
-        btn_del = QPushButton("削除")
 
-        def do_del():
-            # 内部リストから削除
-            for i, (rid, rle, rsp, rlay) in enumerate(list(self._col_rows)):
-                if rle is le and rsp is sp:
-                    self._col_rows.pop(i)
-                    break
-            # レイアウトから取り外し
-            while row.count():
-                w = row.takeAt(0).widget()
-                if w:
-                    w.setParent(None)
+        lb_idx = QLabel("#")
+        row.addWidget(lb_idx)
 
-        btn_del.clicked.connect(do_del)
-
+        # タイトル
         row.addWidget(QLabel("タイトル:"))
-        row.addWidget(le, 1)
+        le_title = QLineEdit(title or col_id)
+        le_title.setMinimumWidth(180)
+        row.addWidget(le_title, 1)
+
+        # 幅
+        row.addSpacing(8)
         row.addWidget(QLabel("幅:"))
-        row.addWidget(sp)
+        sp_width = QSpinBox()
+        sp_width.setRange(COLUMN_WIDTH_MIN, COLUMN_WIDTH_MAX)            # 最小値を30に設定
+        sp_width.setValue(int(width or 240))
+        # 編集確定タイミングで最小/最大へ丸め込み
+        sp_width.editingFinished.connect(lambda sp=sp_width: self._enforce_width_bounds(sp))
+        row.addWidget(sp_width)
+
+        # 並び替えボタン（幅と削除の間）
+        row.addSpacing(12)
+        btn_up = QPushButton("▲")
+        btn_dn = QPushButton("▼")
+        btn_top = QPushButton("⤒")
+        btn_bot = QPushButton("⤓")
+        for b in (btn_up, btn_dn, btn_top, btn_bot):
+            f = b.font(); f.setBold(True); f.setPointSize(max(12, f.pointSize()))
+            b.setFont(f)
+            b.setFixedWidth(30)
+            b.setFixedHeight(26)
+            row.addWidget(b)
+
+        # ツールチップ
+        btn_up.setToolTip("1つ上へ移動")
+        btn_dn.setToolTip("1つ下へ移動")
+        btn_top.setToolTip("最上段へ移動")
+        btn_bot.setToolTip("最下段へ移動")
+
+        # 削除
+        row.addSpacing(12)
+        btn_del = QPushButton("削除")
         row.addWidget(btn_del)
 
-        # ★重要：追加先は self._cols_v（ボタンより上のコンテナ）
+        entry = {
+            "id": col_id,
+            "row_layout": row,
+            "le_title": le_title,
+            "sp_width": sp_width,
+            "btns": (btn_up, btn_dn, btn_top, btn_bot, btn_del),
+            "lb_idx": lb_idx,
+        }
+        self._col_rows.append(entry)
         self._cols_v.addLayout(row)
 
-        self._col_rows.append((cid or "", le, sp, row))
+        # インデックス解決
+        def idx(): return self._col_rows.index(entry)
 
+        # 並び替えハンドラ
+        def on_up():
+            i = idx()
+            if i > 0: self._move_row(i, i - 1)
+
+        def on_dn():
+            i = idx()
+            if i < len(self._col_rows) - 1: self._move_row(i, i + 1)
+
+        def on_top():
+            i = idx()
+            if i > 0: self._move_row(i, 0)
+
+        def on_bot():
+            i = idx()
+            if i < len(self._col_rows) - 1: self._move_row(i, len(self._col_rows) - 1)
+
+        def on_del():
+            i = idx()
+            self._remove_row(i)
+
+        btn_up.clicked.connect(on_up)
+        btn_dn.clicked.connect(on_dn)
+        btn_top.clicked.connect(on_top)
+        btn_bot.clicked.connect(on_bot)
+        btn_del.clicked.connect(on_del)
+
+        self._renumber_rows()
+
+
+    def _enforce_width_bounds(self, sp: QSpinBox):
+        """
+        幅スピンボックスの値を最小～最大に丸める
+        """
+        try:
+            v = int(sp.value())
+        except Exception:
+            v = 240
+        if v < COLUMN_WIDTH_MIN:
+            sp.setValue(COLUMN_WIDTH_MIN)
+        elif v > COLUMN_WIDTH_MAX:
+            sp.setValue(COLUMN_WIDTH_MAX)
+
+    
+    # ===== 並び替え/削除/再配置 =====
+    def _move_row(self, src: int, dst: int):
+        """
+        行の並び替え。編集中の値を失わないように、入れ替え前後で値を退避／復元する。
+        """
+        if src == dst or src < 0 or dst < 0:
+            return
+        if src >= len(self._col_rows) or dst >= len(self._col_rows):
+            return
+        self._capture_current_col_values()
+        entry = self._col_rows.pop(src)
+        self._col_rows.insert(dst, entry)
+        self._rebuild_cols_layout_from_rows()
+        self._restore_current_col_values()
+        self._renumber_rows()
+
+    def _remove_row(self, idx: int):
+        if idx < 0 or idx >= len(self._col_rows):
+            return
+        entry = self._col_rows.pop(idx)
+        row = entry["row_layout"]
+        while row.count():
+            it = row.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+        self._rebuild_cols_layout_from_rows()
+        self._renumber_rows()
+
+    def _rebuild_cols_layout_from_rows(self):
+        """
+        _col_rows の順序に従って VBox の子レイアウト(HBox)を並び直す。
+        既存の行は破棄せず、取り外して再追加するだけにする。
+        """
+        # いまの入力値を退避
+        self._capture_current_col_values()
+
+        # 既存の子レイアウト(HBox)を一旦取り外し
+        while self._cols_v.count():
+            self._cols_v.takeAt(0)
+
+        # 現在の順序で再追加
+        for e in self._col_rows:
+            self._cols_v.addLayout(e["row_layout"])
+
+        # 退避した値を元に戻す（行を付け替えても編集中の値を保持）
+        self._restore_current_col_values()
+
+    def _renumber_rows(self):
+        for i, e in enumerate(self._col_rows, start=1):
+            e["lb_idx"].setText(str(i))
+
+    def _capture_current_col_values(self):
+        """
+        行ウィジェットに入力中の値（タイトル／幅）を一時退避する。
+        並び替えやレイアウト再構成の前に呼び出す。
+        """
+        for e in self._col_rows:
+            # タイトルと幅の“その時点の値”を保存（適用前の一時値）
+            e["__title_tmp__"] = e["le_title"].text()
+            e["__width_tmp__"] = int(e["sp_width"].value())
+
+    def _restore_current_col_values(self):
+        """
+        一時退避した値（タイトル／幅）をウィジェットに戻す。
+        レイアウト再構成の後に呼び出す。
+        """
+        for e in self._col_rows:
+            if "__title_tmp__" in e:
+                e["le_title"].setText(e["__title_tmp__"])
+            if "__width_tmp__" in e:
+                e["sp_width"].setValue(int(e["__width_tmp__"]))
+
+    # ===== 列を追加 =====
+    def _on_add_column(self):
+        base = "col"
+        exist = {e["id"] for e in self._col_rows if e["id"]}
+        n = 1
+        new_id = f"{base}{n}"
+        while new_id in exist:
+            n += 1
+            new_id = f"{base}{n}"
+        self._append_column_row(new_id, f"新しい列 {n}", 240)
+
+    # ===== 適用 =====
     def _on_apply(self):
+        # 列タブ: 現在の順序で columns を構築
         cols = []
-        seen = set()
-        for cid, le, sp, _row in self._col_rows:
-            title = (le.text() or "").strip()
-            width = int(sp.value())
-            if not cid:
-                cid = (title or "col") + "-" + uuid.uuid4().hex[:4]
-            if cid in seen:
-                cid = cid + "-" + uuid.uuid4().hex[:2]
-            seen.add(cid)
-            cols.append({"id": cid, "title": title or cid, "width": width})
+        for e in self._col_rows:
+            cid = e["id"] or (e["le_title"].text().strip() or "col") + "-" + uuid.uuid4().hex[:4]
+            title = e["le_title"].text().strip() or cid
+            width = max(COLUMN_WIDTH_MIN, min(int(e["sp_width"].value()), COLUMN_WIDTH_MAX))
+            cols.append({"id": cid, "title": title, "width": width})
 
-        mh_text = self.ed_holidays.toPlainText()
-        mh_list = []
+        # 手動祝日
+        holidays_text = ""
+        if hasattr(self, "ed_holidays") and self.ed_holidays is not None:
+            holidays_text = self.ed_holidays.toPlainText() or ""
+
         rx = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-        for line in (mh_text or "").splitlines():
-            s = line.strip()
-            if s and rx.match(s):
-                mh_list.append(s)
-        mh_list = sorted(set(mh_list))
+        mh_list = sorted({
+            line.strip()
+            for line in holidays_text.splitlines()
+            if rx.match(line.strip())
+        })
 
+        # 設定辞書に反映
         new_settings = dict(self.settings)
         new_settings["columns"] = cols
         new_settings["font_pt"] = int(self.sp_font.value())
         new_settings["theme"] = "dark" if self.cb_theme_dark.isChecked() else "light"
         new_settings["always_today_top"] = bool(self.cb_today_top.isChecked())
-
-        # ← ここが今回の修正ポイント（スピンボックス値を反映）
-        new_settings["autosave_enabled"] = bool(new_settings.get("autosave_enabled", True))
-        new_settings["autosave_interval_sec"] = int(self.sp_autosave.value())
-
+        new_settings["auto_save_seconds"] = int(self.sp_autosave.value())
         new_settings["expand_days_each"] = int(self.sp_expand.value())
-        new_settings["holidays"] = "\n".join(mh_list)  # ストレージは文字列で保持（既存仕様に合わせる）
+        new_settings["holidays"] = "\n".join(mh_list)
 
         self.applied.emit(new_settings)
         self.accept()
@@ -742,7 +916,7 @@ class CalendarApp(QMainWindow):
         try:
             for idx, col in enumerate(self.columns, start=1):
                 w = int(widths.get(col["id"], header.sectionSize(idx)))
-                w = max(80, w)  # 最小幅の安全弁
+                w = max(COLUMN_WIDTH_MIN, w)  # 下限を30に統一
                 col["width"] = w
                 self.table.setColumnWidth(idx, w)
         finally:
@@ -859,7 +1033,8 @@ class CalendarApp(QMainWindow):
                         width = int(c.get("width", 240))
                     except Exception:
                         width = 240
-                    width = max(80, min(width, 1200))
+                    # 下限を30に統一
+                    width = max(COLUMN_WIDTH_MIN, min(width, COLUMN_WIDTH_MAX))
                     cols.append({"id": cid, "title": title, "width": width})
             if not cols:
                 raise ValueError("columns が不正です")
@@ -901,7 +1076,7 @@ class CalendarApp(QMainWindow):
             if not silent:
                 QMessageBox.warning(self, "読み込み失敗", f"JSONが壊れている可能性があります。\n{e}")
             return False
-    
+
     
     def _load_last_autosave(self):
         candidates = []
@@ -931,7 +1106,7 @@ class CalendarApp(QMainWindow):
 
     def rebuild_range(self, start: date, end: date, keep_scroll: bool):
         """start..end を全面再構築。keep_scroll=True なら元の先頭行を維持"""
-        # ★ 初回だけ、スクロールバーの actionTriggered を接続してユーザー操作を記録
+        # 初回だけ、スクロールバーの actionTriggered を接続してユーザー操作を記録
         if not getattr(self, "_scroll_action_connected", False):
             try:
                 self.table.verticalScrollBar().actionTriggered.connect(self._on_scroll_action)
@@ -963,7 +1138,7 @@ class CalendarApp(QMainWindow):
             self.table.setColumnWidth(0, 120)
             for i, col in enumerate(self.columns, start=1):
                 w = int(col.get("width", 240))
-                w = max(80, min(w, 1200))  # 安全な最小/最大幅
+                w = max(COLUMN_WIDTH_MIN, min(w, COLUMN_WIDTH_MAX))  # 安全な最小/最大幅
                 self.table.setColumnWidth(i, w)
 
             # 本体行の構築
@@ -1351,15 +1526,30 @@ class CalendarApp(QMainWindow):
         except Exception:
             pass
         super().closeEvent(ev)
+    
+    # ---------- 最大化表示 ----------
+    def show_maximized_on_user_screen(self):
+        """
+        起動時に、現在ユーザーのマウスカーソルがあるモニタ上で最大化表示する。
+        マルチモニタ環境でも意図した画面で最大化される。
+        """
+        # カーソル位置の画面を優先、取得できなければプライマリ画面を使う
+        screen = QGuiApplication.screenAt(QCursor.pos())
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
 
+        # まず対象画面の原点にウィンドウを移動してから最大化
+        # （move→showMaximized の順にすることで、正しい画面で最大化される）
+        geo = screen.availableGeometry()
+        self.move(geo.topLeft())
+        self.showMaximized()
 
 def main():
     app = QApplication(sys.argv)
     w = CalendarApp()
-    w.resize(1200, 800)
-    w.show()
-    sys.exit(app.exec())
+    w.show_maximized_on_user_screen()
 
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()
