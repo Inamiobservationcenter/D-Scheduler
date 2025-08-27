@@ -929,7 +929,6 @@ class CalendarApp(QMainWindow):
         # フォールバック（手入力祝日）
         return dt.strftime("%Y-%m-%d") in self.holidays
 
-    
     def rebuild_range(self, start: date, end: date, keep_scroll: bool):
         """start..end を全面再構築。keep_scroll=True なら元の先頭行を維持"""
         # ★ 初回だけ、スクロールバーの actionTriggered を接続してユーザー操作を記録
@@ -940,6 +939,7 @@ class CalendarApp(QMainWindow):
             except Exception:
                 self._scroll_action_connected = False
 
+        # keep_scroll の場合は現在の最上段に見えている日付をアンカーとして退避
         anchor_dt = None
         if keep_scroll and self.table.rowCount() > 0:
             top_row = self.table.rowAt(0)
@@ -951,27 +951,41 @@ class CalendarApp(QMainWindow):
         try:
             self.range_start, self.range_end = start, end
             total_days = (end - start).days + 1
-            self.table.clear()
+
+            # ヘッダ設定（列タイトルは設定を使用）
             headers = ["日付"] + [c["title"] for c in self.columns]
+            self.table.clear()
             self.table.setColumnCount(1 + len(self.columns))
             self.table.setRowCount(total_days)
             self.table.setHorizontalHeaderLabels(headers)
 
+            # 0列目（日付）は固定幅、以降は settings/self.columns の width を反映
+            self.table.setColumnWidth(0, 120)
+            for i, col in enumerate(self.columns, start=1):
+                w = int(col.get("width", 240))
+                w = max(80, min(w, 1200))  # 安全な最小/最大幅
+                self.table.setColumnWidth(i, w)
+
+            # 本体行の構築
             cur = start
             for r in range(total_days):
                 self._build_row(r, cur)
                 cur += timedelta(days=1)
 
+            # 全セルにフォントサイズを適用
             self._apply_font_all(self.font_pt)
+
         finally:
             self._end_table_update()
 
-        # 全行の高さを一括で同期
+        # 高さを全行で同期（2パス）
         self._recalc_all_row_heights()
 
+        # keep_scroll の場合は表示位置を元に戻す（最上段固定）
         if anchor_dt:
             self.scroll_to_date(anchor_dt)
 
+    
     def rebuild_all(self):
         """列名/幅や祝日変更などの際に、現在範囲を描画し直す"""
         self.rebuild_range(self.range_start, self.range_end, keep_scroll=True)
