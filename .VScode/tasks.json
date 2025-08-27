@@ -2,24 +2,12 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Build exe (PyInstaller)",
+      "label": "Build D-Scheduler (exe)",
       "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        "& \"${workspaceFolder}\\.venv\\Scripts\\python.exe\" -m PyInstaller --onefile --noconsole --name D-Scheduler --icon \"${workspaceFolder}\\assets\\app.ico\" \"${workspaceFolder}\\d-scheduler.py\""
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": [],
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      }
+      "command": ".\\.venv\\Scripts\\activate && pyinstaller --onefile --noconsole --name \"D-Scheduler\" --distpath \"D-Scheduler_exe\" --workpath \"D-Scheduler_Code\\build\" --specpath \"D-Scheduler_Code\" --collect-all PyQt6 --icon \"D-Scheduler_Code\\assets\\app.ico\" \"D-Scheduler_Code\\d-scheduler.py\"",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
     }
   ]
 }
